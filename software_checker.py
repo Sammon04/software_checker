@@ -8,70 +8,72 @@ from rapidfuzz import fuzz
 def normalize_name(name : str) -> str:
 
     if name:
-        #Remove Versions from display name
-        name = re.sub(r'\b\d+(\.\d+)+\b', '', name)
-
-        #Remove things in parentheses from display name
-        name = re.sub(r'\([^)]*\)', '', name)
-
-        #Remove ' - ' from display name
-        name = re.sub(r'( - )', '', name)
-
-        #Remove architecture signifiers
-        name = re.sub(r'(x64|x86|amd64|arm64|aarch64|32[- ]?bit|64[- ]?bit|win32|win64)', ' ', name, flags=re.IGNORECASE)
-
-        #Remove language identifiers
-        name = re.sub(r'([a-z]{2}-([a-z]{2}|[A-Z]{2}))', '', name)
-
-        #Normalize case
-        name = name.lower()
-
-        #Remove extra spaces
-        name = re.sub(r'(\s+)', ' ', name).strip()
-
+        name = re.sub(r'\b\d+(\.\d+)+\b', '', name)                     #Remove Versions from display name
+        name = re.sub(r'\([^)]*\)', '', name)                           #Remove things in parentheses from display name
+        name = re.sub(r'( - )', '', name)                               #Remove ' - ' from display name
+        name = re.sub(r'(x64|x86|amd64|arm64|aarch64|32[- ]?bit|64[- ]?bit|win32|win64)', ' ', name, flags=re.IGNORECASE)   #Remove architecture signifiers
+        name = re.sub(r'([a-z]{2}-([a-z]{2}|[A-Z]{2}))', '', name)      #Remove language identifiers
+        name = name.lower()                                             #Normalize case
+        name = re.sub(r'(\s+)', ' ', name).strip()                      #Remove extra spaces
     return name
 
 def normalize_vendor(vendor : str) -> str:
-    if vendor:
-        #Remove publisher tags
-        vendor = re.sub(r'\b(inc|llc|ltd)\b', '', vendor, flags=re.IGNORECASE)
 
-        #Remove periods
-        vendor = re.sub(r'\.', '', vendor)
-
-        #Remove extra spaces
-        vendor = re.sub(r'(\s+)', ' ', vendor).strip()
-
-        #Normalize case
-        vendor = vendor.lower()
-
+    if vendor:    
+        vendor = re.sub(r'\b(inc|llc|ltd)\b', '', vendor, flags=re.IGNORECASE)  #Remove publisher tags
+        vendor = re.sub(r'\.', '', vendor)                                      #Remove periods
+        vendor = re.sub(r'(\s+)', ' ', vendor).strip()                          #Remove extra spaces
+        vendor = vendor.lower()                                                 #Normalize case
     return vendor
 
 #Takes json object returned from circle vulerability query and displays relevent information
-def print_circl_result(data):
-    if data["results"]:
-        print("**CVE Details**")
-        for sourceName in data["results"]:
-            print(f"Source: {sourceName}")
+def print_circl_result(data) -> bool:
+    if not data["results"]:
+        print("No CVEs listed")
+        return False
+    
+    print("**CVE Details**")
+    for sourceName in data["results"]:
+        print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
+        print(f"Source: {sourceName}")
 
-            source = data["results"].get(sourceName)
-            cve = source[0]
-            print(f"CVE Name: {cve[0]}")
+        source = data["results"].get(sourceName)
+        cve = source[0]
+        print(f"CVE Name: {cve[0]}")
 
-            cve_data = cve[1]
-            containers = cve_data.get("containers")
-            for containerName in containers:
-                container = containers.get(containerName)
+        cve_data = cve[1]
+        containers = cve_data.get("containers")
+        for containerName in containers:
+            container = containers.get(containerName)
 
-                if containerName == "cna" and isinstance(container, dict) and "metrics" in container:
-                    print("CNA Description and metrics:")
+            if containerName == "cna" and isinstance(container, dict):
+                print("CNA:")
+
+                if "affected" in container:
+                    affected = container.get("affected")
+                    print("\tAffected:")
+                    print(f"\t\tVendor: {affected[0]["vendor"]}")
+                    print(f"\t\tProduct: {affected[0]["product"]}")
+
+                    if "versions" in affected[0]:
+                        versions = affected[0]["versions"][0]
+                        for key, value in versions.items():
+                            print(f"\t\t{key}: {value}")
+
+                if "descriptions" in container:
                     description = container.get("descriptions")
+                    print(f"\tDescription: \n\t{description[0]["value"]}")
+                else:
+                    print("\tNo Descriptions Found")
+
+                if "metrics" in container:
                     metrics = container.get("metrics")
-
-                    print(f"\tDescription: {description[0]["value"]}")
                     print("\tScoring standards:")
+                else:
+                    print("\tNo Scoring Standards Found")
 
-                    for standardName in metrics[0]:
+                for standardName in metrics[0]:
+                    if standardName != "format":
                         print(f"\t\tName: {standardName}")
                         standard = metrics[0].get(standardName)
 
@@ -79,19 +81,19 @@ def print_circl_result(data):
                             print(f"\t\tScore: {standard["baseScore"]}")
                             print(f"\t\tSeverity: {standard["baseSeverity"]}")
 
-                if containerName == "adp" and isinstance(container, list):
-                    print("ADP details: ")
-                    for item in container:
-                        if isinstance(item, dict) and "metrics" in item:
-                            metrics = item.get("metrics")
-                    try:
-                        for tag in metrics[0]["other"]["content"]["options"]:
-                            for title, status in tag.items():
-                                print(f"\t{title}: {status}")
-                    except KeyError as e:
-                        print(e)
-    else:
-        print("No CVEs listed")
+            if containerName == "adp" and isinstance(container, list):
+                print("ADP details: ")
+                for item in container:
+                    if isinstance(item, dict) and "metrics" in item:
+                        metrics = item.get("metrics")
+                try:
+                    for tag in metrics[0]["other"]["content"]["options"]:
+                        for title, status in tag.items():
+                            print(f"\t{title}: {status}")
+                except KeyError as e:
+                    print(e)
+        print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
+        return True
 
 
 #Current: attempts to match a raw vendor name from the registry with a vendor listed in circl's vendor list
@@ -109,7 +111,7 @@ def match_vendor(raw_vendor : str, vendors : list, alias_map : dict) -> dict:
     
     for vendor in vendors:
         ratio = fuzz.ratio(norm_vendor, vendor)
-        if ratio >= 90 and vendor not in vendor_dict:
+        if ratio >= 95 and vendor not in vendor_dict:
             vendor_dict[vendor] = ratio
 
     
@@ -128,7 +130,7 @@ def match_product(raw_product : str, products : list, alias_map : dict) -> dict:
     
     for product in products:
         ratio = fuzz.ratio(norm_product, product)
-        if ratio >= 90 and product not in product_dict:
+        if ratio >= 95 and product not in product_dict:
             product_dict[product] = ratio
     
     return product_dict
@@ -136,42 +138,53 @@ def match_product(raw_product : str, products : list, alias_map : dict) -> dict:
 def check_for_vulnerabilities(software_list, circl_vendors, aliases):
     prev_vendors = {}
     print("LOOKING FOR VULNERABILITIES")
-    for software in software_list:
+    
+    for software in software_list:                                          #For every installed program:
 
         raw_vendor = software["Publisher"]
-        raw_product = software["Publisher"]
-        vendor_list = match_vendor(raw_vendor, circl_vendors, aliases)
+        raw_product = software["DisplayName"]
+        vendor_list = match_vendor(raw_vendor, circl_vendors, aliases)      #Create a dict of matching circl vendors and their similarity ratio
 
-        if vendor_list:
-            for vendor, vendor_ratio in vendor_list.items():
+        if not vendor_list:
+            continue
 
-                if vendor not in prev_vendors:
-                    print(f"Gathering products for {vendor}")
-                    r = requests.get(f"https://cve.circl.lu/api/browse/{vendor}")
-                    if r.ok:
-                        prev_vendors[vendor] = r.json()
-                    else:
-                        print("CIRCL ERROR")
-            
-                if vendor in prev_vendors:
-                    product_list = match_product(raw_product, prev_vendors[vendor], aliases)
-                    if product_list:
-                        for product, product_ratio in product_list.items():
-                            print('--------------')
-                            if vendor_ratio >= 100 and product_ratio >= 100:
-                                print("**EXACT MATCH FOUND!**")
-                            else:
-                                print("**PARTIAL MATCH FOUND**")
-                            print(f"Product: {product}")
-                            print(f"Vendor: {vendor}")
-                            r = requests.get(f"https://cve.circl.lu/api/vulnerability/search/{vendor}/{product}")
-                            if r.ok:
-                                result = r.json()
-                                print_circl_result(result)
+        for vendor, vendor_ratio in vendor_list.items():
 
-                            else:
-                                print("CIRCL ERROR")
-    
+            if vendor not in prev_vendors:                                  #Gather products for this vendor if we haven't yet
+                print(f"Gathering products for {vendor}")
+                r = requests.get(f"https://cve.circl.lu/api/browse/{vendor}")
+                if r.ok:
+                    prev_vendors[vendor] = r.json()
+                else:
+                    print("CIRCL ERROR")
+        
+            if vendor not in prev_vendors:                                  #If circl doesn't have that vendor, skip
+                continue
+
+            product_list = match_product(raw_product, prev_vendors[vendor], aliases)    #Create a list of matching circl products for that vendor
+
+            if not product_list:
+                continue
+
+            for product, product_ratio in product_list.items():
+
+                print('----------------------------')
+                if vendor_ratio >= 100 and product_ratio >= 100:
+                    print("**EXACT MATCH FOUND!**")
+                else:
+                    print("*Partial Match Found*")
+
+                print(f"Product: {product}")
+                print(f"Vendor: {vendor}")
+
+                r = requests.get(f"https://cve.circl.lu/api/vulnerability/search/{vendor}/{product}")
+                if r.ok:
+                    result = r.json()
+                    print_circl_result(result)
+
+                else:
+                    print("CIRCL ERROR")
+
 
 def main():
     #powershell command to gather installed software on the system and return it as a JSON list
