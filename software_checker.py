@@ -26,6 +26,84 @@ def normalize_vendor(vendor : str) -> str:
         vendor = vendor.lower()                                                 #Normalize case
     return vendor
 
+def gather_circl_results(data) -> dict:
+    result = {}
+    if not data["results"]:
+        return result
+    
+    for source_name in data["results"]:
+        source_data = data["results"].get(source_name)
+        
+        for cve in source_data:
+            cve_name = cve[0]
+
+            if cve_name not in result:
+                result[cve_name] = {}
+
+            result[cve_name][source_name] = {}
+            cve_entry = result[cve_name][source_name]
+
+            containers = cve[1].get("containers")
+            if not containers:
+                continue
+
+            cna = containers.get("cna")
+            if not cna:
+                continue
+            
+            title = cna.get("title")
+            if title:
+                cve_entry["title"] = title
+            
+            description = cna.get("descriptions")
+            if description:
+                cve_entry["description"] = description[0]["value"]
+            
+            affected_data = cna.get("affected")
+            if "affected" in cna:
+                vendor = affected_data[0]["vendor"]
+                product = affected_data[0]["product"]
+                version_info = affected_data[0].get("versions")
+                cve_entry["affected"] = {}
+                affected_results = cve_entry["affected"]
+
+                cve_entry["vendor"] = vendor
+                cve_entry["product"] = product
+                
+                if "versionType" in version_info[0] and version_info[0]["versionType"] == "custom":
+
+                    affected_results["version"] = "<" + version_info[0]["lessThan"]
+
+                elif '<' in version_info[0]["version"]:
+
+                    stripped_version = version_info[0]["version"].replace(" ", "")
+                    affected_results["version"] = stripped_version
+
+                else:
+
+                    affected_results["version"] = version_info[0]["version"]
+
+                affected_results["status"] = version_info[0]["status"]
+
+            if "metrics" in cna:
+                cve_entry["metrics"] = {}
+                metrics = cve_entry["metrics"]
+
+                for key, value in cna["metrics"][0].items():
+                    if isinstance(value, dict):
+
+                        metrics["Scoring System"] = key
+
+                        if "baseScore" in value:
+                            metrics["baseScore"] = value["baseScore"]
+
+                        if "baseSeverity" in value:
+                           metrics["baseSeverity"] = value["baseSeverity"]
+    
+    return result
+    
+    
+
 #Takes json object returned from circle vulerability query and displays relevent information
 def print_circl_result(data) -> bool:
     if not data["results"]:
@@ -38,62 +116,62 @@ def print_circl_result(data) -> bool:
         print(f"Source: {sourceName}")
 
         source = data["results"].get(sourceName)
-        cve = source[0]
-        print(f"CVE Name: {cve[0]}")
+        for cve in source:
+            print(f"CVE Name: {cve[0]}")
 
-        cve_data = cve[1]
-        containers = cve_data.get("containers")
-        for containerName in containers:
-            container = containers.get(containerName)
+            cve_data = cve[1]
+            containers = cve_data.get("containers")
+            for containerName in containers:
+                container = containers.get(containerName)
 
-            if containerName == "cna" and isinstance(container, dict):
-                print("CNA:")
+                if containerName == "cna" and isinstance(container, dict):
+                    print("CNA:")
 
-                if "affected" in container:
-                    affected = container.get("affected")
-                    print("\tAffected:")
-                    print(f"\t\tVendor: {affected[0]["vendor"]}")
-                    print(f"\t\tProduct: {affected[0]["product"]}")
+                    if "affected" in container:
+                        affected = container.get("affected")
+                        print("\tAffected:")
+                        print(f"\t\tVendor: {affected[0]["vendor"]}")
+                        print(f"\t\tProduct: {affected[0]["product"]}")
 
-                    if "versions" in affected[0]:
-                        versions = affected[0]["versions"][0]
-                        for key, value in versions.items():
-                            print(f"\t\t{key}: {value}")
+                        if "versions" in affected[0]:
+                            versions = affected[0]["versions"][0]
+                            for key, value in versions.items():
+                                print(f"\t\t{key}: {value}")
 
-                if "descriptions" in container:
-                    description = container.get("descriptions")
-                    print(f"\tDescription: \n\t{description[0]["value"]}")
-                else:
-                    print("\tNo Descriptions Found")
+                    if "descriptions" in container:
+                        description = container.get("descriptions")
+                        print(f"\tDescription: \n\t{description[0]["value"]}")
+                    else:
+                        print("\tNo Descriptions Found")
 
-                if "metrics" in container:
-                    metrics = container.get("metrics")
-                    print("\tScoring standards:")
-                else:
-                    print("\tNo Scoring Standards Found")
+                    if "metrics" in container:
+                        metrics = container.get("metrics")
+                        print("\tScoring standards:")
+                    else:
+                        print("\tNo Scoring Standards Found")
 
-                for standardName in metrics[0]:
-                    if standardName != "format":
-                        print(f"\t\tName: {standardName}")
-                        standard = metrics[0].get(standardName)
+                    for standardName in metrics[0]:
+                        if standardName != "format":
+                            print(f"\t\tName: {standardName}")
+                            standard = metrics[0].get(standardName)
 
-                        if isinstance(standard, dict):
-                            print(f"\t\tScore: {standard["baseScore"]}")
-                            print(f"\t\tSeverity: {standard["baseSeverity"]}")
+                            if isinstance(standard, dict):
+                                print(f"\t\tScore: {standard["baseScore"]}")
+                                print(f"\t\tSeverity: {standard["baseSeverity"]}")
 
-            if containerName == "adp" and isinstance(container, list):
-                print("ADP details: ")
-                for item in container:
-                    if isinstance(item, dict) and "metrics" in item:
-                        metrics = item.get("metrics")
-                try:
-                    for tag in metrics[0]["other"]["content"]["options"]:
-                        for title, status in tag.items():
-                            print(f"\t{title}: {status}")
-                except KeyError as e:
-                    print(e)
-        print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
-        return True
+                if containerName == "adp" and isinstance(container, list):
+                    print("ADP details: ")
+                    for item in container:
+                        if isinstance(item, dict) and "metrics" in item:
+                            metrics = item.get("metrics")
+                    try:
+                        for tag in metrics[0]["other"]["content"]["options"]:
+                            for title, status in tag.items():
+                                print(f"\t{title}: {status}")
+                    except KeyError as e:
+                        print(e)
+            print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
+    return True
 
 
 #Current: attempts to match a raw vendor name from the registry with a vendor listed in circl's vendor list
