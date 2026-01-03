@@ -176,12 +176,10 @@ def match_version(installed_version : str, affected_version : str) -> bool:
         return False
         
 
-
-    
 def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
     prev_vendors = {}
     final_result = {}
-    print("Checking Circl Database for Vulnerabilities")
+    print(" - Scanning Circl Database for Vulnerabilities")
     
     for software in software_list:                                          #For every installed program:
 
@@ -196,7 +194,7 @@ def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
         for vendor, vendor_ratio in vendor_list.items():
 
             if vendor not in prev_vendors:                                  #Gather products for this vendor if we haven't yet
-                print(f"Gathering products for {vendor}")
+                print(f" - Gathering products for {vendor}")
                 r = requests.get(f"https://cve.circl.lu/api/browse/{vendor}")
                 if r.ok:
                     prev_vendors[vendor] = r.json()
@@ -231,17 +229,21 @@ def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
 
                 print('----------------------------')
                 if vendor_ratio >= 100 and product_ratio >= 100:
-                    print("**EXACT MATCH FOUND!**")
+                    print("Exact Match Found:")
                 else:
-                    print("*Partial Match Found*")
+                    print("Partial Match Found:")
 
                 print(f"Product: {product}")
                 print(f"Vendor: {vendor}")
+                print('----------------------------')
 
-
-        
-    with open("testoutput.json", "w") as f:
-        json.dump(final_result, f, indent=4)
+    print("Scan Finished")
+    with open("Vulnerability_Output.json", "w") as output_file:
+        if final_result:
+            print("Possible Vulnerabilities Found. Saved to \"Vulnerability_Output.json\"")
+            json.dump(final_result, output_file, indent=4)
+        else:
+            print("No Vulnerabilities Found :)")
 
 
 def main():
@@ -264,7 +266,7 @@ def main():
     """
 
     try:
-        print("Gathering installed software... This may take a moment.")
+        print(" - Gathering installed software... This may take a moment.")
         result = subprocess.run(["powershell.exe", "-Command", powershell_command], 
                                 capture_output=True, 
                                 text=True, 
@@ -296,7 +298,7 @@ def main():
         "notepad++" : "notepad-plus-plus"
     }
 
-    print("GATHERING VENDORS")
+    print(" - Gathering Circl Vendors")
     r = requests.get(f"https://cve.circl.lu/api/browse/")
     if r.ok:
         circl_vendors = r.json()
