@@ -26,7 +26,7 @@ def normalize_vendor(vendor : str) -> str:
         vendor = vendor.lower()                                                 #Normalize case
     return vendor
 
-def gather_circl_results(data) -> dict:
+def gather_circl_results(data, installed_version) -> dict:
     result = {}
     if not data["results"]:
         return result
@@ -60,30 +60,37 @@ def gather_circl_results(data) -> dict:
                 cve_entry["description"] = description[0]["value"]
             
             affected_data = cna.get("affected")
-            if "affected" in cna:
-                vendor = affected_data[0]["vendor"]
-                product = affected_data[0]["product"]
-                version_info = affected_data[0].get("versions")
-                cve_entry["affected"] = {}
-                affected_results = cve_entry["affected"]
+            if not affected_data:
+                continue
 
-                cve_entry["vendor"] = vendor
-                cve_entry["product"] = product
-                
-                if "versionType" in version_info[0] and version_info[0]["versionType"] == "custom":
+            vendor = affected_data[0]["vendor"]
+            product = affected_data[0]["product"]
+            version_info = affected_data[0].get("versions")
+            cve_entry["affected"] = {}
+            affected_results = cve_entry["affected"]
 
-                    affected_results["version"] = "<" + version_info[0]["lessThan"]
+            cve_entry["vendor"] = vendor
+            cve_entry["product"] = product
+            
+            if "versionType" in version_info[0] and version_info[0]["versionType"] == "custom":
 
-                elif '<' in version_info[0]["version"]:
+                affected_results["version"] = "<" + version_info[0]["lessThan"]
 
-                    stripped_version = version_info[0]["version"].replace(" ", "")
-                    affected_results["version"] = stripped_version
+            elif '<' in version_info[0]["version"]:
 
-                else:
+                stripped_version = version_info[0]["version"].replace(" ", "")
+                affected_results["version"] = stripped_version
 
-                    affected_results["version"] = version_info[0]["version"]
+            else:
 
-                affected_results["status"] = version_info[0]["status"]
+                affected_results["version"] = version_info[0]["version"]
+
+            if not match_version(installed_version, affected_results["version"]):
+                del result[cve_name][source_name]
+                continue
+
+            affected_results["status"] = version_info[0]["status"]
+
 
             if "metrics" in cna:
                 cve_entry["metrics"] = {}
@@ -99,79 +106,16 @@ def gather_circl_results(data) -> dict:
 
                         if "baseSeverity" in value:
                            metrics["baseSeverity"] = value["baseSeverity"]
+        
+    remove_list = []
+    for cve, data in result.items():
+        if not data:
+            remove_list.append(cve)
+    
+    for cve in remove_list:
+        del result[cve]
     
     return result
-    
-    
-
-#Takes json object returned from circle vulerability query and displays relevent information
-def print_circl_result(data) -> bool:
-    if not data["results"]:
-        print("No CVEs listed")
-        return False
-    
-    print("**CVE Details**")
-    for sourceName in data["results"]:
-        print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
-        print(f"Source: {sourceName}")
-
-        source = data["results"].get(sourceName)
-        for cve in source:
-            print(f"CVE Name: {cve[0]}")
-
-            cve_data = cve[1]
-            containers = cve_data.get("containers")
-            for containerName in containers:
-                container = containers.get(containerName)
-
-                if containerName == "cna" and isinstance(container, dict):
-                    print("CNA:")
-
-                    if "affected" in container:
-                        affected = container.get("affected")
-                        print("\tAffected:")
-                        print(f"\t\tVendor: {affected[0]["vendor"]}")
-                        print(f"\t\tProduct: {affected[0]["product"]}")
-
-                        if "versions" in affected[0]:
-                            versions = affected[0]["versions"][0]
-                            for key, value in versions.items():
-                                print(f"\t\t{key}: {value}")
-
-                    if "descriptions" in container:
-                        description = container.get("descriptions")
-                        print(f"\tDescription: \n\t{description[0]["value"]}")
-                    else:
-                        print("\tNo Descriptions Found")
-
-                    if "metrics" in container:
-                        metrics = container.get("metrics")
-                        print("\tScoring standards:")
-                    else:
-                        print("\tNo Scoring Standards Found")
-
-                    for standardName in metrics[0]:
-                        if standardName != "format":
-                            print(f"\t\tName: {standardName}")
-                            standard = metrics[0].get(standardName)
-
-                            if isinstance(standard, dict):
-                                print(f"\t\tScore: {standard["baseScore"]}")
-                                print(f"\t\tSeverity: {standard["baseSeverity"]}")
-
-                if containerName == "adp" and isinstance(container, list):
-                    print("ADP details: ")
-                    for item in container:
-                        if isinstance(item, dict) and "metrics" in item:
-                            metrics = item.get("metrics")
-                    try:
-                        for tag in metrics[0]["other"]["content"]["options"]:
-                            for title, status in tag.items():
-                                print(f"\t{title}: {status}")
-                    except KeyError as e:
-                        print(e)
-            print("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ")
-    return True
 
 
 #Current: attempts to match a raw vendor name from the registry with a vendor listed in circl's vendor list
@@ -212,15 +156,38 @@ def match_product(raw_product : str, products : list, alias_map : dict) -> dict:
             product_dict[product] = ratio
     
     return product_dict
+
+def match_version(installed_version : str, affected_version : str) -> bool:
+    less_than = True if "<" in affected_version else False
+    stripped_installed = re.sub(r'\D', '', installed_version)
+    stripped_affected = re.sub(r'\D', '', affected_version)
+
+    try:
+        installed_int = int(stripped_installed)
+        affected_int = int(stripped_affected)
+    except ValueError:
+        return False
     
-def check_for_vulnerabilities(software_list, circl_vendors, aliases):
+    if less_than and installed_int < affected_int:
+        return True
+    elif not less_than and installed_int == affected_int:
+        return True
+    else:
+        return False
+        
+
+
+    
+def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
     prev_vendors = {}
-    print("LOOKING FOR VULNERABILITIES")
+    final_result = {}
+    print("Checking Circl Database for Vulnerabilities")
     
     for software in software_list:                                          #For every installed program:
 
         raw_vendor = software["Publisher"]
         raw_product = software["DisplayName"]
+        raw_version = software["DisplayVersion"]
         vendor_list = match_vendor(raw_vendor, circl_vendors, aliases)      #Create a dict of matching circl vendors and their similarity ratio
 
         if not vendor_list:
@@ -245,6 +212,22 @@ def check_for_vulnerabilities(software_list, circl_vendors, aliases):
                 continue
 
             for product, product_ratio in product_list.items():
+                
+                r = requests.get(f"https://cve.circl.lu/api/vulnerability/search/{vendor}/{product}")
+                if not r.ok:
+                    print("CIRCL ERROR")
+                    continue
+
+                circl_response = r.json()
+                cve_details = gather_circl_results(circl_response, raw_version)
+
+                if not cve_details:
+                    continue
+
+                final_result[product] = {}
+                final_result[product]["Vendor Confidence"] = vendor_ratio
+                final_result[product]["Product Confidence"] = product_ratio
+                final_result[product]["CVE's"] = cve_details
 
                 print('----------------------------')
                 if vendor_ratio >= 100 and product_ratio >= 100:
@@ -255,17 +238,13 @@ def check_for_vulnerabilities(software_list, circl_vendors, aliases):
                 print(f"Product: {product}")
                 print(f"Vendor: {vendor}")
 
-                r = requests.get(f"https://cve.circl.lu/api/vulnerability/search/{vendor}/{product}")
-                if r.ok:
-                    result = r.json()
-                    print_circl_result(result)
 
-                else:
-                    print("CIRCL ERROR")
+        
+    with open("testoutput.json", "w") as f:
+        json.dump(final_result, f, indent=4)
 
 
 def main():
-    #powershell command to gather installed software on the system and return it as a JSON list
     powershell_command = r"""
     $paths = @(
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -284,9 +263,6 @@ def main():
     $software | Where-Object { $_.DisplayName } | ConvertTo-Json
     """
 
-    #Gather installed software on the system
-    #Runs the above powershell command
-    #----------------------
     try:
         print("Gathering installed software... This may take a moment.")
         result = subprocess.run(["powershell.exe", "-Command", powershell_command], 
@@ -303,25 +279,23 @@ def main():
         print(f"stderr: {e.stderr}")
     except FileNotFoundError:
         print("ERROR: Powershell not found")
+    
 
-    #Loads the powershell output JSON into a variable
-    data = json.loads(result.stdout)
+    installed_software = json.loads(result.stdout)
 
-    if isinstance(data, dict):
-        data = [data]
-    #----------------------
+    if isinstance(installed_software, dict):
+        installed_software = [installed_software]
+    
+    with open("installed_software.json", "w") as f:
+        json.dump(installed_software, f, indent=4)
 
-    #List of hard-coded software/vendor aliases
-    #----------------------
     aliases = {
         "igor pavlov" : "7-zip",
         "microsoft corporation" : "microsoft",
         "notepad++ team" : "notepad-plus-plus",
         "notepad++" : "notepad-plus-plus"
     }
-    #----------------------
 
-    #Gets the list of all software vendors from circl
     print("GATHERING VENDORS")
     r = requests.get(f"https://cve.circl.lu/api/browse/")
     if r.ok:
@@ -329,7 +303,7 @@ def main():
     else:
         print("CIRCL ERROR")
 
-    check_for_vulnerabilities(data, circl_vendors, aliases)
+    gather_circl_vulnerabilities(installed_software, circl_vendors, aliases)
 
 
 if __name__ == "__main__":
