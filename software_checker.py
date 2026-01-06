@@ -3,9 +3,11 @@ import json
 import requests
 import re
 from rapidfuzz import fuzz
+from packaging.version import parse
+from packaging.version import InvalidVersion
 
 
-def normalize_name(name : str) -> str:
+def normalize_product_name(name : str) -> str:
 
     if name:
         name = re.sub(r'\b\d+(\.\d+)+\b', '', name)                     #Remove Versions from display name
@@ -26,16 +28,27 @@ def normalize_vendor(vendor : str) -> str:
         vendor = vendor.lower()                                                 #Normalize case
     return vendor
 
+def normalize_version(version : str) -> str:
+
+    if version:
+        version = re.sub(r'[<>=!]', '', version)
+        version = re.sub(r'\([^)]*\)', '', version)
+        version = re.sub(r'(x64|x86|amd64|arm64|aarch64|32[- ]?bit|64[- ]?bit|win32|win64)', ' ', version, flags=re.IGNORECASE)
+        version = re.sub(r'(\s+)', ' ', version).strip()
+    return version
+
 def gather_circl_results(data, installed_version) -> dict:
     result = {}
     if not data["results"]:
         return result
     
     for source_name in data["results"]:
+        if source_name == "fkie_nvd":       #todo Remove this and actually implement this source
+            continue
         source_data = data["results"].get(source_name)
         
         for cve in source_data:
-            cve_name = cve[0]
+            cve_name = cve[0].replace("fkie_", '')
 
             if cve_name not in result:
                 result[cve_name] = {}
@@ -73,8 +86,11 @@ def gather_circl_results(data, installed_version) -> dict:
             cve_entry["product"] = product
             
             if "versionType" in version_info[0] and version_info[0]["versionType"] == "custom":
-
-                affected_results["version"] = "<" + version_info[0]["lessThan"]
+                
+                if "lessThan" in version_info[0]:
+                    affected_results["version"] = "<" + version_info[0]["lessThan"]
+                elif "lessThanOrEqual" in version_info[0]:
+                    affected_results["version"] = "<=" + version_info[0]["lessThanOrEqual"]
 
             elif '<' in version_info[0]["version"]:
 
@@ -141,42 +157,51 @@ def match_vendor(raw_vendor : str, vendors : list, alias_map : dict) -> dict:
 
 #Current: attempts to match a raw product name from the registry with a product listed in circl's list of products for a given vendor
 def match_product(raw_product : str, products : list, alias_map : dict) -> dict:
-    product_dict = {}
-    norm_product = normalize_name(raw_product)
+    final_product_dict = {}
+    norm_product = normalize_product_name(raw_product)
+    product_test_list = [norm_product]
 
     if norm_product in alias_map:
-        norm_product = alias_map[norm_product]
+        product_test_list.append(alias_map[norm_product])
 
-    if norm_product in products:
-        product_dict[norm_product] = 100
+    for test_product in product_test_list:
+        if test_product in products:
+            final_product_dict[test_product] = 100
     
-    for product in products:
-        ratio = fuzz.ratio(norm_product, product)
-        if ratio >= 95 and product not in product_dict:
-            product_dict[product] = ratio
+    for test_product in product_test_list:
+        for circl_product in products:
+            ratio = fuzz.ratio(test_product, circl_product)
+            if ratio >= 95 and circl_product not in final_product_dict:
+                final_product_dict[circl_product] = ratio
     
-    return product_dict
+    return final_product_dict
 
 def match_version(installed_version : str, affected_version : str) -> bool:
+    less_than_or_equal = True if "<=" in affected_version else False
     less_than = True if "<" in affected_version else False
-    stripped_installed = re.sub(r'\D', '', installed_version)
-    stripped_affected = re.sub(r'\D', '', affected_version)
+    
+    norm_installed = normalize_version(installed_version)
+    norm_affected = normalize_version(affected_version)
 
     try:
-        installed_int = int(stripped_installed)
-        affected_int = int(stripped_affected)
-    except ValueError:
+        v_inst = parse(norm_installed)
+        v_aff = parse(norm_affected)
+    except InvalidVersion as e:
         return False
+
+    if less_than_or_equal and v_inst <= v_aff:
+        return True
     
-    if less_than and installed_int < affected_int:
+    if less_than and v_inst < v_aff:
         return True
-    elif not less_than and installed_int == affected_int:
+    
+    if v_inst == v_aff:
         return True
-    else:
-        return False
+
+    return False
         
 
-def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
+def gather_circl_vulnerabilities(software_list, circl_vendors, aliases) -> dict:
     prev_vendors = {}
     final_result = {}
     print(" - Scanning Circl Database for Vulnerabilities")
@@ -245,8 +270,7 @@ def gather_circl_vulnerabilities(software_list, circl_vendors, aliases):
         else:
             print("No Vulnerabilities Found :)")
 
-
-def main():
+def gather_installed_programs() -> list:
     powershell_command = r"""
     $paths = @(
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -281,12 +305,17 @@ def main():
         print(f"stderr: {e.stderr}")
     except FileNotFoundError:
         print("ERROR: Powershell not found")
-    
 
     installed_software = json.loads(result.stdout)
 
     if isinstance(installed_software, dict):
         installed_software = [installed_software]
+    
+    return installed_software
+
+def main():
+
+    installed_software = gather_installed_programs()
     
     with open("installed_software.json", "w") as f:
         json.dump(installed_software, f, indent=4)
