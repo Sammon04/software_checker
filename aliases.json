@@ -1,0 +1,10 @@
+{
+    "vendors" : {
+        "igor pavlov" : "7-zip",
+        "microsoft corporation" : "microsoft",
+        "notepad++ team" : "notepad-plus-plus"
+    },
+    "software" : {
+        "notepad++" : "notepad-plus-plus"
+    }
+}
